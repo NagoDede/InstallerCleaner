@@ -1,9 +1,9 @@
 # InstallerCleaner
 
-Following what you do with your PC, the /Installler directory can reach several Gb of data to save unnecessary MSI and MSP files, normally used for installation and removal of the applications and software patches. These files remain in the /Installer directory even if you delete/uninstall your software in a clean manner.
-Several tools propose to clean the /installer directory. But even if they are efficient, I was not happy with the usage. They request too much clicks or don't have backup options.
+Following what you do with your PC, the C:/Windows/Installer directory can reach several Gb of data to save unnecessary MSI and MSP files, normally used for installation and removal of the applications and software patches. These files remain in the C:/Windows/Installer directory even if you delete/uninstall your software in a clean manner.
+Several tools propose to clean the C:/Windows/Installer directory. But even if they are efficient, I was not happy with the usage. They request too much clicks or don't have backup options.
 
-InstallerCleaner is a small tool to clean the C:/Windows/Installer directory and offers backup capability. It is a command-line tool that requests tdmin rights. It can generate a report or perform simulation of file removal. So, you know correctly what will be done or what was done by the tool. If you run the software with the appropriate option, you can recover your deleted files.
+InstallerCleaner is a small tool to clean the C:/Windows/Installer directory and offers backup capability. It is a command-line tool that requests admin rights. It can generate a report or perform simulation of files removal. So, you know what will be done or what was done by the tool. If you run the software with the appropriate options, you can easily recover your deleted files.
 
 ## Usage
 The tool has three main options:
@@ -14,7 +14,10 @@ The tool has three main options:
     command-line --move target_directory
 
 Additionally, the tool can create a report (the report is automatically generated in simulate mode), thanks to the command line --report.
-The command-line options are also accessible thanks to the --help command.
+The command-line options are also accessible thanks the --help command.
+
+## Installation
+Download the files set in bin/Release, copy somewhere on your hard drive, it could be C:/Temp... and launch the tools from a Windows Command box.
 
 ## Build
 As there is a single module, it shall not be a problem.
