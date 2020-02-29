@@ -1,6 +1,10 @@
 ﻿Imports System.IO
 Imports Appature.Common
 Imports System.Reflection
+Imports Microsoft.Tools.WindowsInstallerXml
+Imports System
+Imports System.Linq
+
 Module Module1
 
     Private Structure parserOptions
@@ -58,7 +62,7 @@ Module Module1
 #Enable Warning BC42030 ' La variable est transmise par référence avant de se voir attribuer une valeur
             End If
             WriteRowInSw(sw, "The following files will be kept in " & parseOptions.InputDir)
-            WriteListInSw(sw, KeptList)
+            WriteFileListInSw(sw, KeptList)
         End If
 
         'retrieve the files to be deleted or moved
@@ -71,7 +75,7 @@ Module Module1
 
                 If parseOptions.toReport Then
                     WriteRowInSw(sw, "The following files will be moved in " & parseOptions.MoveDir)
-                    WriteListInSw(sw, toProcessList)
+                    WriteFileListInSw(sw, toProcessList)
                 End If
                 MoveListFiles(toProcessList, parseOptions.MoveDir, parseOptions.toSimulate)
             Else
@@ -85,7 +89,7 @@ Module Module1
 
                 If parseOptions.toReport Then
                     WriteRowInSw(sw, "The following files will be deleted")
-                    WriteListInSw(sw, toProcessList)
+                    WriteFileListInSw(sw, toProcessList)
                 End If
 
                 DeleteListFiles(toProcessList, parseOptions.toSimulate)
@@ -120,37 +124,128 @@ Module Module1
     ''' </summary>
     ''' <returns></returns>
     Private Function GetMandatoryFiles() As List(Of String)
-        Dim ToBeKeptList As New List(Of String)
+        Dim toBeKeptList As New List(Of String)
 
         Dim msi As Object
         msi = CreateObject("WindowsInstaller.Installer")
 
         ' Enumerate all products
         Dim products As IEnumerable = CType(msi.Products, IEnumerable)
-
-        Console.WriteLine("Output format: productCode , patchCode , location")
-
         For Each productCode In products
-            ' For each product, enumerate its applied patches
-            Dim patches As IEnumerable = CType(msi.Patches(productCode), IEnumerable)
-            Dim patchCode
 
-            For Each patchCode In patches
-                ' Get the local patch location
-                Dim location As String = CStr(msi.PatchInfo(patchCode, "LocalPackage"))
+            'retrieve the location of the product 
+            Dim productName As String = CStr(msi.ProductInfo(productCode, "ProductName"))
 
+            If productName = "" Then
+                FailedList.Add("productCode: " & CStr(productCode) & " cannot be retrieved")
+            Else
+                Dim location As String = CStr(msi.ProductInfo(productCode, "LocalPackage"))
                 If File.Exists(location) Then
-                    Console.WriteLine(productCode & ", " & patchCode & ", " & location & "(" & GetSize(location) & ")")
                     ToBeKeptList.Add(location)
+                    Console.WriteLine(location)
+                    Console.WriteLine(PropertiesToString(location, msi, " "))
+
+                    Dim patchList As List(Of String)
+                    patchList = GetAssociatedPatches(CStr(productCode), msi)
+
+                    'retrieve the pacthes associated to the product
+                    If patchList.Count > 0 Then
+                        Console.WriteLine("** Patches **")
+
+                        For Each pth In patchList
+                            Dim properties As Dictionary(Of String, String)
+                            properties = GetMSIProperty(pth, msi)
+                            'keep only the patches which have the appropriate allowremoval option
+                            If properties.ContainsKey("AllowRemoval") Then
+                                Dim allowRemoval As Integer = CInt(properties("AllowRemoval"))
+                                If allowRemoval = 0 Then 'if set to 0, the patch cannot be removed, it means the msp can be removed of installer directory
+                                    Console.ForegroundColor = ConsoleColor.Gray
+                                    Console.WriteLine(PropertiesToString(properties, "   "))
+                                    Console.ResetColor()
+                                Else
+                                    ToBeKeptList.Add(pth)
+                                    Console.ForegroundColor = ConsoleColor.Cyan
+                                    Console.WriteLine(PropertiesToString(properties, "   "))
+                                    Console.ResetColor()
+                                End If
+                            End If
+                        Next
+                    End If
                 Else
                     Console.ForegroundColor = ConsoleColor.Red
-                    Console.WriteLine(productCode & ", " & patchCode & ", " & location & " does not exist")
+                    Console.WriteLine("File: " & productCode & ", " & location & " does not exist")
+                    FailedList.Add("File: " & CStr(productCode) & ", " & location & " does not exist")
                     Console.ResetColor()
                 End If
-
-            Next
+            End If
         Next
         Return ToBeKeptList
+    End Function
+    ''' <summary>
+    ''' Return a list of msp files associated to the product.
+    ''' </summary>
+    ''' <param name="productCode">ProductCode of the product</param>
+    ''' <param name="msi">msi object, if nothing a windowsinstaller object is created</param>
+    ''' <returns>List of MSP file pathes</returns>
+    Private Function GetAssociatedPatches(productCode As String, ByRef msi As Object) As List(Of String)
+
+        If msi Is Nothing Then
+            msi = CreateObject("WindowsInstaller.Installer")
+        End If
+
+
+        Dim toBeKeptPatchList As New List(Of String)
+
+        ' For each product, enumerate its applied patches
+        Dim patches As IEnumerable = CType(msi.Patches(productCode), IEnumerable)
+        Dim patchCode
+
+        For Each patchCode In patches
+            ' Get the local patch location
+            Dim patchLocation As String = CStr(msi.PatchInfo(patchCode, "LocalPackage"))
+
+            If File.Exists(patchLocation) Then
+                toBeKeptPatchList.Add(patchLocation)
+            Else
+                Console.ForegroundColor = ConsoleColor.Red
+                Console.WriteLine("Patch: " & patchCode & ", " & patchLocation & " does not exist")
+                FailedList.Add("Patch: " & CStr(patchCode) & ", " & patchLocation & " does not exist")
+                Console.ResetColor()
+            End If
+
+        Next
+        Return toBeKeptPatchList
+    End Function
+
+    ''' <summary>
+    ''' Print MSI or MSp properties in a readable format
+    ''' </summary>
+    ''' <param name="location">Path of the MSI or MSP file</param>
+    ''' <param name="msi">msi object, if nothing, a msi object is created</param>
+    ''' <param name="offset"> string offset to enhance the print</param>
+    ''' <returns>Properties in readable format</returns>
+    Private Function PropertiesToString(location As String, ByRef msi As Object, Optional offset As String = "") As String
+        If msi Is Nothing Then
+            msi = CreateObject("WindowsInstaller.Installer")
+        End If
+
+        Dim properties As Dictionary(Of String, String)
+        properties = GetMSIProperty(location, msi)
+        Return PropertiesToString(properties, offset)
+    End Function
+
+    ''' <summary>
+    ''' Print properties dictionary in a string format
+    ''' </summary>
+    ''' <param name="properties"></param>
+    ''' <param name="offset">string offset to enhance the print</param>
+    ''' <returns></returns>
+    Private Function PropertiesToString(properties As Dictionary(Of String, String), Optional offset As String = "") As String
+
+        Dim s As String
+        s = offset & String.Join(vbCrLf & offset, properties.Select(Function(kvp) String.Format("{0}={1}", kvp.Key, kvp.Value)).ToArray()) & vbCrLf
+
+        Return s
     End Function
 
     ''' <summary>
@@ -336,6 +431,82 @@ Module Module1
         Console.WriteLine("Delete " & count - CUInt(1) & " Files")
     End Sub
 
+    ''' <summary>
+    ''' Retrieve the relevant properties of a MSi or MSP files.
+    ''' To retrieve the information, the function use the OpenDataBase function of msi object.
+    ''' It could have been possible to retrieve some information by using the ProductInfo property.
+    ''' Significant information for MSP files come from: https://docs.microsoft.com/fr-fr/windows/win32/msi/msipatchmetadata-table
+    ''' General knowledge about the Database: 
+    ''' https://docs.microsoft.com/fr-fr/windows/win32/msi/database-tables
+    ''' https://docs.microsoft.com/fr-fr/windows/win32/msi/getting-application-information
+    ''' https://docs.microsoft.com/fr-fr/windows/win32/msi/installer-object
+    ''' </summary>
+    ''' <param name="msiFile">Path to the MSI or MSP file</param>
+    ''' <param name="msi">msi object, if nothing a msi object is created</param>
+    ''' <returns></returns>
+    Public Function GetMSIProperty(msiFile As String, Optional ByRef msi As Object = Nothing) As Dictionary(Of String, String)
+
+        Dim results As New Dictionary(Of String, String)
+        Dim retVal As String = String.Empty
+
+        Dim sql As String
+
+        If msi Is Nothing Then
+            msi = CreateObject("WindowsInstaller.Installer")
+        End If
+
+        If Not File.Exists(msiFile) Then
+            Return results
+        End If
+
+        Dim openMode As Integer
+        If Path.GetExtension(msiFile).Contains("msp") Then
+            openMode = 32 ' = msiOpenDatabaseModePatchFile
+            sql = String.Format("SELECT * FROM MsiPatchMetadata WHERE Property = 'MoreInfoURL'" &
+                                " OR Property = 'ManufacturerName'" &
+                                " OR Property = 'AllowRemoval'" &
+                                " OR Property = 'DisplayName'" &
+                                " OR Property = 'Description'" &
+                                " OR Property = 'PatchVersion'" &
+                                " OR Property = 'EULAID'" &
+                                " OR Property = 'TargetProductName' ") 'MsiPatchMetadata, MsiPatchSequence _Tables
+        ElseIf Path.GetExtension(msiFile).Contains("msi") Then
+            openMode = 0 'msiOpenDatabaseModeReadOnly
+            sql = String.Format("SELECT * FROM Property WHERE Property = 'ProductCode' OR Property = 'ProductName' OR Property = 'Manufacturer' OR Property = 'ProductCode'")
+        Else
+            FailedList.Add("File: " & msiFile & " is not a MSI or MSP file")
+            Return results
+        End If
+
+        Try
+            results("File") = msiFile
+            results("Size") = GetSize(msiFile)
+
+            Dim database = msi.OpenDatabase(msiFile, openMode)
+            Dim view = database.OpenView(sql)
+            view.Execute(Nothing)
+
+            Dim record = view.Fetch()
+            While record IsNot Nothing
+                If openMode = 0 Then
+                    results(CStr(record.StringData(1))) = CStr(record.StringData(2))
+                ElseIf openMode = 32 Then
+                    results(CStr(record.StringData(2))) = CStr(record.StringData(3))
+                End If
+                    record = view.Fetch()
+            End While
+
+            view.Close()
+
+            Return results
+        Catch
+            Dim errorrecord = msi.LastErrorRecord()
+            FailedList.Add("File: " & msiFile & " Error Code:" & CStr(errorrecord.StringData(1)))
+            Return results
+        End Try
+
+    End Function
+
     Private Sub InitParse(ByRef parser As CommandParser)
         parseOptions.InputDir = WIN_DIR_INSTALLER
         parseOptions.MoveDir = DFLT_DIR_MOVE
@@ -479,13 +650,28 @@ Module Module1
         Return Nothing
     End Function
 
+    Private Sub WriteFileListInSw(ByRef sw As StreamWriter, ByRef lst As List(Of String))
+
+        For Each r In lst
+            If File.Exists(r) Then
+                WriteRowInSw(sw, r)
+                WriteRowInSw(sw, PropertiesToString(r, Nothing, "   "))
+            Else
+                WriteRowInSw(sw, "Unable to find file: " & r)
+            End If
+
+        Next r
+
+    End Sub
+
     Private Sub WriteListInSw(ByRef sw As StreamWriter, ByRef lst As List(Of String))
 
         For Each r In lst
-                sw.WriteLine(r)
-            Next r
+            WriteRowInSw(sw, r)
+        Next r
 
     End Sub
+
     Private Sub WriteRowInSw(ByRef sw As StreamWriter, txt As String)
         If sw IsNot Nothing Then
             sw.WriteLine(txt)
